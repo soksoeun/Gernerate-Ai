@@ -11,22 +11,12 @@ export interface LanguageConfig {
   flag: string;
 }
 
-// Interface for TTS voice configuration
 export interface VoiceConfig {
   id: string;
   name: string;
-  emoji: string;
   gender: string;
+  emoji: string;
 }
-
-// Prebuilt voices available in Gemini TTS
-export const KHMER_VOICES: VoiceConfig[] = [
-  { id: 'Kore', name: 'Kore', emoji: '👦', gender: 'Male' },
-  { id: 'Puck', name: 'Puck', emoji: '👨', gender: 'Male' },
-  { id: 'Charon', name: 'Charon', emoji: '🧔', gender: 'Male' },
-  { id: 'Fenrir', name: 'Fenrir', emoji: '🐺', gender: 'Male' },
-  { id: 'Zephyr', name: 'Zephyr', emoji: '👧', gender: 'Female' },
-];
 
 export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
   { name: 'Khmer', nativeName: 'ភាសាខ្មែរ', code: 'km', flag: '🇰🇭' },
@@ -37,4 +27,15 @@ export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
   { name: 'Spanish', nativeName: 'Español', code: 'es', flag: '🇪🇸' },
   { name: 'Japanese', nativeName: '日本語', code: 'ja', flag: '🇯🇵' },
   { name: 'Chinese', nativeName: '中文', code: 'zh', flag: '🇨🇳' },
+];
+
+/**
+ * Available voices for Gemini TTS
+ * Options include: 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'
+ */
+export const KHMER_VOICES: VoiceConfig[] = [
+  { id: 'Kore', name: 'Kore', gender: 'Male', emoji: '👨' },
+  { id: 'Zephyr', name: 'Zephyr', gender: 'Female', emoji: '👩' },
+  { id: 'Puck', name: 'Puck', gender: 'Male', emoji: '👦' },
+  { id: 'Charon', name: 'Charon', gender: 'Male', emoji: '🧔' },
 ];

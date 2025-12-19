@@ -1,10 +1,10 @@
 
 import { GoogleGenAI, Modality } from "@google/genai";
-import { decodeAudioData, decode } from "./audio";
+import { decode, decodeAudioData } from "./audio";
 
 // Transcribe audio using Gemini 3 Flash
 export const transcribeKhmerAudio = async (base64Audio: string, mimeType: string = 'audio/webm', languageName: string = "Khmer"): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
@@ -29,24 +29,20 @@ export const transcribeKhmerAudio = async (base64Audio: string, mimeType: string
 };
 
 /**
- * Synthesizes text to speech using Gemini's TTS model.
- * @param text The text to convert to speech.
- * @param voiceName The prebuilt voice name (e.g., 'Kore', 'Zephyr').
- * @param _options Additional options like pitch/rate (currently unused).
- * @param languageName The name of the language for context.
- * @returns Promise<AudioBuffer>
+ * Synthesize speech using Gemini 2.5 Flash TTS model.
+ * Returns an AudioBuffer which can be played back or converted to other formats.
  */
 export const synthesizeSpeech = async (
   text: string, 
   voiceName: string, 
-  _options: any, 
+  _config: any, 
   languageName: string
 ): Promise<AudioBuffer> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text: `Say this in ${languageName}: ${text}` }] }],
+    contents: [{ parts: [{ text: `Say this clearly in ${languageName}: ${text}` }] }],
     config: {
       responseModalities: [Modality.AUDIO],
       speechConfig: {
@@ -59,11 +55,15 @@ export const synthesizeSpeech = async (
 
   const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
   if (!base64Audio) {
-    throw new Error("No audio data returned from the model.");
+    throw new Error("Failed to generate audio content from Gemini API.");
   }
 
-  // Audio bytes returned by the API is raw PCM data. 
-  // We use a sample rate of 24000 for Gemini TTS decoding.
+  // Gemini TTS returns raw PCM at 24kHz
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-  return await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
+  return await decodeAudioData(
+    decode(base64Audio),
+    audioContext,
+    24000,
+    1
+  );
 };

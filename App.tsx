@@ -2,18 +2,14 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { SUPPORTED_LANGUAGES, LanguageConfig } from './types';
 import { SttSection } from './components/SttSection';
-import { TtsSection } from './components/TtsSection';
 
 const App: React.FC = () => {
   const [currentLanguage, setCurrentLanguage] = useState<LanguageConfig>(SUPPORTED_LANGUAGES[0]);
   const [isLangModalOpen, setIsLangModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'stt' | 'tts'>('stt');
   
   // State for transcription (STT)
   const [transcription, setTranscription] = useState('');
-  // State for text input (TTS)
-  const [ttsText, setTtsText] = useState('');
   
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -44,9 +40,9 @@ const App: React.FC = () => {
       return;
     }
 
-    if (transcription.trim() || ttsText.trim()) {
+    if (transcription.trim()) {
       const confirmSwitch = window.confirm(
-        `You have existing content in ${currentLanguage.name}. Switching to ${lang.name} will update the context for both transcription and synthesis. Continue?`
+        `You have an existing transcription in ${currentLanguage.name}. Switching to ${lang.name} will clear the current context. Continue?`
       );
       if (!confirmSwitch) return;
     }
@@ -66,7 +62,7 @@ const App: React.FC = () => {
             </div>
             <div className="hidden sm:block">
               <h1 className="font-bold text-gray-900 leading-none text-lg">Voice AI</h1>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">Gemini Intelligence</p>
+              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">Gemini Transcription</p>
             </div>
           </div>
           
@@ -92,57 +88,26 @@ const App: React.FC = () => {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
             </span>
-            <span>Gemini Multimodal AI</span>
+            <span>Gemini 3 Flash Powered</span>
           </div>
           
           <h2 className="text-4xl font-black text-gray-900 sm:text-6xl mb-4 khmer-font tracking-tight leading-tight">
-            {currentLanguage.code === 'km' ? 'បច្ចេកវិទ្យាសំឡេង' : `Voice AI Toolkit`}
+            {currentLanguage.code === 'km' ? 'បំលែងសំឡេងទៅជាអត្ថបទ' : `Voice Transcription`}
           </h2>
           
           <p className="text-gray-500 max-w-xl mx-auto mb-8 text-lg font-medium leading-relaxed">
-            Harness the power of Gemini for seamless audio transcription and natural speech synthesis in {currentLanguage.name}.
+            Harness the power of Gemini for seamless audio transcription in {currentLanguage.name}. Speak naturally and watch your voice turn into text.
           </p>
-
-          <div className="flex items-center justify-center gap-3 mb-8">
-            <button 
-              onClick={() => setActiveTab('stt')}
-              className={`px-8 py-3 rounded-2xl font-black text-sm uppercase tracking-wider transition-all ${
-                activeTab === 'stt' 
-                ? 'bg-blue-600 text-white shadow-xl shadow-blue-200 ring-4 ring-blue-50' 
-                : 'bg-white text-gray-500 border border-gray-100 hover:bg-gray-50 shadow-sm'
-              }`}
-            >
-              Speech to Text
-            </button>
-            <button 
-              onClick={() => setActiveTab('tts')}
-              className={`px-8 py-3 rounded-2xl font-black text-sm uppercase tracking-wider transition-all ${
-                activeTab === 'tts' 
-                ? 'bg-purple-600 text-white shadow-xl shadow-purple-200 ring-4 ring-purple-50' 
-                : 'bg-white text-gray-500 border border-gray-100 hover:bg-gray-50 shadow-sm'
-              }`}
-            >
-              Text to Speech
-            </button>
-          </div>
         </div>
 
         <div className="relative">
           <div className="absolute -inset-4 bg-gradient-to-tr from-blue-500/5 to-purple-500/5 rounded-[40px] blur-2xl -z-10 opacity-60"></div>
           <div className="bg-white rounded-[32px] p-2 shadow-xl shadow-blue-900/5 border border-white overflow-hidden">
-            {activeTab === 'stt' ? (
-              <SttSection 
-                language={currentLanguage} 
-                transcription={transcription} 
-                setTranscription={setTranscription} 
-              />
-            ) : (
-              <TtsSection 
-                language={currentLanguage}
-                text={ttsText}
-                setText={setTtsText}
-              />
-            )}
+            <SttSection 
+              language={currentLanguage} 
+              transcription={transcription} 
+              setTranscription={setTranscription} 
+            />
           </div>
         </div>
       </main>
@@ -156,7 +121,7 @@ const App: React.FC = () => {
               <div className="flex items-center justify-between mb-6">
                 <div>
                   <h3 className="text-2xl font-black text-gray-900">Choose Language</h3>
-                  <p className="text-sm text-gray-400 font-medium">Select your preferred voice language</p>
+                  <p className="text-sm text-gray-400 font-medium">Select your preferred transcription language</p>
                 </div>
                 <button onClick={() => setIsLangModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                   <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12"></path></svg>
@@ -210,7 +175,7 @@ const App: React.FC = () => {
             </span>
             <span>Active: {currentLanguage.name}</span>
           </div>
-          <div>© 2024 Voice AI Global</div>
+          <div>© 2024 KhmerVoice AI Global</div>
         </div>
       </footer>
     </div>
