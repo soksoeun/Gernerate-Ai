@@ -1,5 +1,5 @@
 {
-  "name": "KhmerVoice AI",
+  "name": "Khmer AI Gernerate",
   "description": "A high-performance Khmer language application featuring advanced Speech-to-Text (STT) transcription and Text-to-Speech (TTS) synthesis powered by Gemini 2.5.",
   "requestFramePermissions": [
     "microphone"

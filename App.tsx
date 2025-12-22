@@ -2,18 +2,19 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { SUPPORTED_LANGUAGES, LanguageConfig } from './types';
 import { SttSection } from './components/SttSection';
+import { TtsSection } from './components/TtsSection';
 
 const App: React.FC = () => {
   const [currentLanguage, setCurrentLanguage] = useState<LanguageConfig>(SUPPORTED_LANGUAGES[0]);
   const [isLangModalOpen, setIsLangModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeMode, setActiveMode] = useState<'stt' | 'tts'>('stt');
   
-  // State for transcription (STT)
   const [transcription, setTranscription] = useState('');
+  const [ttsText, setTtsText] = useState('');
   
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Close modal on Escape key
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isLangModalOpen) {
@@ -25,7 +26,6 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleEsc);
   }, [isLangModalOpen]);
 
-  // Filter languages based on search query
   const filteredLanguages = useMemo(() => {
     return SUPPORTED_LANGUAGES.filter(lang => 
       lang.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -33,128 +33,164 @@ const App: React.FC = () => {
     );
   }, [searchQuery]);
 
-  // Handle language selection and reset relevant states
   const handleLanguageSelect = (lang: LanguageConfig) => {
     if (lang.code === currentLanguage.code) {
       setIsLangModalOpen(false);
       return;
     }
 
-    if (transcription.trim()) {
+    if (transcription.trim() || ttsText.trim()) {
       const confirmSwitch = window.confirm(
-        `You have an existing transcription in ${currentLanguage.name}. Switching to ${lang.name} will clear the current context. Continue?`
+        `Switching to ${lang.name} will reset current progress. Continue?`
       );
       if (!confirmSwitch) return;
     }
 
     setCurrentLanguage(lang);
+    setTranscription('');
+    setTtsText('');
     setIsLangModalOpen(false);
     setSearchQuery('');
   };
 
   return (
-    <div className="min-h-screen pb-20 bg-[#fbfcfd]">
-      <header className="bg-white/70 backdrop-blur-xl border-b border-gray-100 sticky top-0 z-50">
-        <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
+    <div className="min-h-screen pb-20 bg-gray-50/50">
+      {/* Professional Header */}
+      <header className="bg-white/80 backdrop-blur-md border-b border-gray-100 sticky top-0 z-50 transition-all duration-300">
+        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white text-xl shadow-lg shadow-blue-200/50">
-              {currentLanguage.flag}
+            <div className="w-9 h-9 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
             </div>
-            <div className="hidden sm:block">
-              <h1 className="font-bold text-gray-900 leading-none text-lg">Voice AI</h1>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">Gemini Transcription</p>
+            <div>
+              <h1 className="font-bold text-gray-900 leading-tight text-sm tracking-tight">KhmerVoice AI</h1>
+              <div className="flex items-center gap-1.5">
+                 <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                 <p className="text-[10px] text-gray-500 font-medium">Gemini 2.5 Active</p>
+              </div>
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setIsLangModalOpen(true)}
-              className="flex items-center gap-2.5 px-3 py-1.5 bg-white border border-gray-200 rounded-full hover:border-blue-300 transition-all group shadow-sm"
-            >
-              <span className="text-sm rounded-full w-6 h-6 flex items-center justify-center bg-gray-50">{currentLanguage.flag}</span>
-              <span className="text-sm font-bold text-gray-700">{currentLanguage.nativeName}</span>
-              <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7"></path>
-              </svg>
-            </button>
-          </div>
+          {/* Details Style Language Button */}
+          <button 
+            onClick={() => setIsLangModalOpen(true)}
+            className="group flex items-center gap-3 pl-4 pr-3 py-2 bg-gray-50 hover:bg-white border border-transparent hover:border-gray-200 rounded-full transition-all duration-200 shadow-sm hover:shadow-md"
+          >
+            <div className="flex flex-col items-end mr-1">
+              <span className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider leading-none">Language</span>
+              <span className="text-xs font-semibold text-gray-800 mt-0.5">{currentLanguage.nativeName}</span>
+            </div>
+            <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center text-sm shadow-sm border border-gray-100 group-hover:scale-105 transition-transform">
+              {currentLanguage.flag}
+            </div>
+          </button>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 mt-12 mb-16">
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 rounded-full text-[10px] font-black uppercase tracking-widest mb-6 border border-blue-100 shadow-sm">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
-            </span>
-            <span>Gemini 3 Flash Powered</span>
-          </div>
-          
-          <h2 className="text-4xl font-black text-gray-900 sm:text-6xl mb-4 khmer-font tracking-tight leading-tight">
-            {currentLanguage.code === 'km' ? 'បំលែងសំឡេងទៅជាអត្ថបទ' : `Voice Transcription`}
+      <main className="max-w-5xl mx-auto px-6 mt-10 mb-20">
+        <div className="flex flex-col items-center mb-10">
+          <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2 khmer-font text-center">
+            {currentLanguage.code === 'km' ? 'បច្ចេកវិទ្យាសំឡេងឆ្លាតវៃ' : `Professional Voice Studio`}
           </h2>
-          
-          <p className="text-gray-500 max-w-xl mx-auto mb-8 text-lg font-medium leading-relaxed">
-            Harness the power of Gemini for seamless audio transcription in {currentLanguage.name}. Speak naturally and watch your voice turn into text.
+          <p className="text-gray-500 text-sm font-medium mb-8 text-center max-w-lg">
+            High-fidelity transcription and synthesis powered by Google's Gemini 2.5 Flash model.
           </p>
+
+          {/* Elegant Segmented Control */}
+          <div className="inline-flex p-1.5 bg-white rounded-2xl border border-gray-200 shadow-sm">
+            <button
+              onClick={() => setActiveMode('stt')}
+              className={`flex items-center gap-2.5 px-6 py-2.5 rounded-xl text-xs font-semibold tracking-wide transition-all duration-200 ${
+                activeMode === 'stt'
+                ? 'bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-100'
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+              Speech to Text
+            </button>
+            <button
+              onClick={() => setActiveMode('tts')}
+              className={`flex items-center gap-2.5 px-6 py-2.5 rounded-xl text-xs font-semibold tracking-wide transition-all duration-200 ${
+                activeMode === 'tts'
+                ? 'bg-purple-50 text-purple-700 shadow-sm ring-1 ring-purple-100'
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path></svg>
+              Text to Speech
+            </button>
+          </div>
         </div>
 
         <div className="relative">
-          <div className="absolute -inset-4 bg-gradient-to-tr from-blue-500/5 to-purple-500/5 rounded-[40px] blur-2xl -z-10 opacity-60"></div>
-          <div className="bg-white rounded-[32px] p-2 shadow-xl shadow-blue-900/5 border border-white overflow-hidden">
-            <SttSection 
-              language={currentLanguage} 
-              transcription={transcription} 
-              setTranscription={setTranscription} 
-            />
-          </div>
+          {activeMode === 'stt' ? (
+            <div className="animate-fadeIn">
+              <div className="bg-white rounded-3xl shadow-xl shadow-gray-200/40 border border-gray-100 overflow-hidden">
+                <SttSection 
+                  language={currentLanguage} 
+                  setCurrentLanguage={setCurrentLanguage}
+                  transcription={transcription} 
+                  setTranscription={setTranscription} 
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="animate-fadeIn">
+              <div className="bg-white rounded-3xl shadow-xl shadow-gray-200/40 border border-gray-100 overflow-hidden">
+                <TtsSection 
+                  language={currentLanguage}
+                  text={ttsText}
+                  setText={setTtsText}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
       {/* Language Modal */}
       {isLangModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-gray-900/40 backdrop-blur-md" onClick={() => setIsLangModalOpen(false)} />
-          <div className="relative bg-white w-full max-w-lg rounded-[32px] shadow-2xl overflow-hidden animate-scaleIn border border-white">
-            <div className="p-8 pb-4">
-              <div className="flex items-center justify-between mb-6">
+          <div className="absolute inset-0 bg-gray-900/20 backdrop-blur-sm transition-opacity" onClick={() => setIsLangModalOpen(false)} />
+          <div className="relative bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden animate-scaleIn ring-1 ring-gray-200">
+            <div className="p-6 border-b border-gray-100 bg-gray-50/30">
+              <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="text-2xl font-black text-gray-900">Choose Language</h3>
-                  <p className="text-sm text-gray-400 font-medium">Select your preferred transcription language</p>
+                  <h3 className="text-lg font-bold text-gray-900">Select Language</h3>
+                  <p className="text-xs text-gray-500 font-medium mt-1">Choose your preferred input/output language</p>
                 </div>
-                <button onClick={() => setIsLangModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-                  <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12"></path></svg>
+                <button onClick={() => setIsLangModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors text-gray-400 hover:text-gray-600">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
               </div>
               <div className="relative">
+                <svg className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                 <input 
                   ref={searchInputRef}
                   type="text"
                   placeholder="Search languages..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full px-5 py-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
+                  className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm font-medium"
                 />
               </div>
             </div>
-            <div className="px-8 pb-8 pt-4 max-h-[50vh] overflow-y-auto scrollbar-hide">
-              <div className="grid grid-cols-2 gap-3">
+            <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-hide">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {filteredLanguages.map((lang) => (
                   <button
                     key={lang.code}
                     onClick={() => handleLanguageSelect(lang)}
-                    className={`p-4 rounded-[22px] text-left border-2 transition-all flex flex-col gap-3 group ${
+                    className={`flex flex-col items-center justify-center p-4 rounded-2xl border transition-all duration-200 group ${
                       currentLanguage.code === lang.code 
-                      ? 'border-blue-500 bg-blue-50/50' 
-                      : 'border-gray-50 bg-white hover:border-gray-200 hover:bg-gray-50'
+                      ? 'border-blue-500 bg-blue-50/50 shadow-sm ring-1 ring-blue-500/20' 
+                      : 'border-gray-100 bg-white hover:border-gray-300 hover:shadow-sm'
                     }`}
                   >
-                    <span className="text-3xl transition-transform group-hover:scale-110 origin-left">{lang.flag}</span>
-                    <div>
-                      <div className={`font-black text-sm ${currentLanguage.code === lang.code ? 'text-blue-700' : 'text-gray-900'}`}>{lang.nativeName}</div>
-                      <div className="text-[11px] text-gray-400 font-bold uppercase tracking-wider">{lang.name}</div>
-                    </div>
+                    <span className="text-3xl mb-3 filter drop-shadow-sm group-hover:scale-110 transition-transform duration-200">{lang.flag}</span>
+                    <div className={`font-semibold text-sm truncate w-full text-center ${currentLanguage.code === lang.code ? 'text-blue-700' : 'text-gray-700'}`}>{lang.nativeName}</div>
+                    <div className="text-xs text-gray-400 font-medium mt-0.5">{lang.name}</div>
                   </button>
                 ))}
               </div>
@@ -163,20 +199,8 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-white/60 backdrop-blur-xl border-t border-gray-100 p-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between text-[10px] text-gray-400 font-black uppercase tracking-widest">
-          <div className="flex items-center gap-6">
-            <span className="flex items-center gap-2">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500"></span>
-              </span>
-              Operational
-            </span>
-            <span>Active: {currentLanguage.name}</span>
-          </div>
-          <div>© 2024 KhmerVoice AI Global</div>
-        </div>
+      <footer className="max-w-4xl mx-auto px-4 py-8 flex items-center justify-center">
+         <p className="text-[10px] font-medium text-gray-400 tracking-wider uppercase">Powered by Gemini 2.5 • KhmerVoice AI</p>
       </footer>
     </div>
   );

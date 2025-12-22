@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
-import { synthesizeSpeech } from '../services/gemini';
-import { KHMER_VOICES, LanguageConfig } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { synthesizeSpeech, synthesizeMultiSpeakerSpeech } from '../services/gemini';
+import { VOICE_PERSONAS, SUPPORTED_STYLES, LanguageConfig, VoiceConfig, StyleConfig } from '../types';
 
 interface TtsSectionProps {
   language: LanguageConfig;
@@ -10,208 +10,394 @@ interface TtsSectionProps {
 }
 
 export const TtsSection: React.FC<TtsSectionProps> = ({ language, text, setText }) => {
-  const [selectedVoice, setSelectedVoice] = useState(KHMER_VOICES[0].id);
+  const [ttsMode, setTtsMode] = useState<'solo' | 'scene'>('solo');
+  
+  // Single Speaker State
+  const [selectedVoice, setSelectedVoice] = useState<VoiceConfig>(VOICE_PERSONAS[0]);
+  const [selectedStyle, setSelectedStyle] = useState<StyleConfig>(SUPPORTED_STYLES[0]);
+  const [genderFilter, setGenderFilter] = useState<'Male' | 'Female'>('Female');
+  
+  // Script to Scene State
+  // Default Speaker A to a male voice and Speaker B to a female voice
+  const [speakerA, setSpeakerA] = useState({ 
+    name: 'Joe', 
+    voice: VOICE_PERSONAS.find(v => v.gender === 'Male') || VOICE_PERSONAS[0],
+    style: SUPPORTED_STYLES[0]
+  });
+  const [speakerB, setSpeakerB] = useState({ 
+    name: 'Jane', 
+    voice: VOICE_PERSONAS.find(v => v.gender === 'Female') || VOICE_PERSONAS[0],
+    style: SUPPORTED_STYLES[0]
+  });
+
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  
+  const filteredVoices = useMemo(() => VOICE_PERSONAS.filter(v => v.gender === genderFilter), [genderFilter]);
 
   useEffect(() => {
-    return () => {
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-      }
-    };
-  }, [audioUrl]);
+    if (ttsMode === 'solo') {
+      const isStillValid = filteredVoices.some(v => v.id === selectedVoice.id && v.name === selectedVoice.name);
+      if (!isStillValid && filteredVoices.length > 0) setSelectedVoice(filteredVoices[0]);
+    }
+  }, [filteredVoices, selectedVoice, ttsMode]);
+
+  useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
 
   const handleSynthesize = async () => {
     if (!text.trim()) return;
-
     setIsSynthesizing(true);
     try {
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-        setAudioUrl(null);
-      }
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      
+      let audioBuffer;
+      if (ttsMode === 'solo') {
+        // Enhanced prompt for solo mode using the detailed description
+        const characterPrompt = `
+Generate speech in ${language.name}.
+Speaker Profile: ${selectedVoice.description}.
+Speaking Style: ${selectedStyle.instruction}.
+Text: "${text}"`;
 
-      const audioBuffer = await synthesizeSpeech(text, selectedVoice, { pitch: 0, rate: 1.0, intensity: 5 }, language.name);
-      const wavBlob = await audioBufferToWav(audioBuffer);
+        audioBuffer = await synthesizeSpeech(characterPrompt, selectedVoice.id, {}, language.name);
+      } else {
+        const speakers = [
+          { name: speakerA.name, voiceId: speakerA.voice.id },
+          { name: speakerB.name, voiceId: speakerB.voice.id }
+        ];
+        
+        // Enhanced prompt for scene mode
+        const scriptWithContext = `
+Generate a conversation in ${language.name}.
+
+Speaker Configuration:
+- ${speakerA.name} (${speakerA.voice.name}): ${speakerA.voice.description}. Tone: ${speakerA.style.instruction}.
+- ${speakerB.name} (${speakerB.voice.name}): ${speakerB.voice.description}. Tone: ${speakerB.style.instruction}.
+
+Script:
+${text}`;
+
+        audioBuffer = await synthesizeMultiSpeakerSpeech(scriptWithContext, speakers, language.name);
+      }
+      
+      const wavBlob = await (async () => {
+        const numOfChan = audioBuffer.numberOfChannels;
+        const length = audioBuffer.length * numOfChan * 2 + 44;
+        const outBuffer = new ArrayBuffer(length);
+        const view = new DataView(outBuffer);
+        const channels = [];
+        let pos = 0;
+        const setUint16 = (data: number) => { view.setUint16(pos, data, true); pos += 2; };
+        const setUint32 = (data: number) => { view.setUint32(pos, data, true); pos += 4; };
+        setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157); setUint32(0x20746d66); setUint32(16); setUint16(1); setUint16(numOfChan); setUint32(audioBuffer.sampleRate); setUint32(audioBuffer.sampleRate * 2 * numOfChan); setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164); setUint32(length - pos - 4);
+        for (let i = 0; i < audioBuffer.numberOfChannels; i++) channels.push(audioBuffer.getChannelData(i));
+        let offset = 0;
+        while (pos < length) {
+          for (let i = 0; i < numOfChan; i++) {
+            let s = Math.max(-1, Math.min(1, channels[i][offset]));
+            view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            pos += 2;
+          }
+          offset++;
+        }
+        return new Blob([outBuffer], { type: 'audio/wav' });
+      })();
+
       const url = URL.createObjectURL(wavBlob);
       setAudioUrl(url);
-      
-      const audio = new Audio(url);
-      audio.play();
-    } catch (error) {
-      console.error("Synthesis error:", error);
-      alert("Failed to synthesize speech.");
-    } finally {
-      setIsSynthesizing(false);
-    }
-  };
-
-  const playAudio = () => {
-    if (audioUrl) {
-      const audio = new Audio(audioUrl);
-      audio.play();
-    }
-  };
-
-  const downloadTextFile = () => {
-    if (!text) return;
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${language.code}-text-${new Date().getTime()}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const audioBufferToWav = async (buffer: AudioBuffer): Promise<Blob> => {
-    const numOfChan = buffer.numberOfChannels;
-    const length = buffer.length * numOfChan * 2 + 44;
-    const outBuffer = new ArrayBuffer(length);
-    const view = new DataView(outBuffer);
-    const channels = [];
-    let offset = 0;
-    let pos = 0;
-
-    const setUint16 = (data: number) => { view.setUint16(pos, data, true); pos += 2; };
-    const setUint32 = (data: number) => { view.setUint32(pos, data, true); pos += 4; };
-
-    setUint32(0x46464952); // "RIFF"
-    setUint32(length - 8);
-    setUint32(0x45564157); // "WAVE"
-    setUint32(0x20746d66); // "fmt "
-    setUint32(16);
-    setUint16(1);
-    setUint16(numOfChan);
-    setUint32(buffer.sampleRate);
-    setUint32(buffer.sampleRate * 2 * numOfChan);
-    setUint16(numOfChan * 2);
-    setUint16(16);
-    setUint32(0x61746164); // "data"
-    setUint32(length - pos - 4);
-
-    for (let i = 0; i < buffer.numberOfChannels; i++) {
-      channels.push(buffer.getChannelData(i));
-    }
-
-    while (pos < length) {
-      for (let i = 0; i < numOfChan; i++) {
-        let sample = Math.max(-1, Math.min(1, channels[i][offset]));
-        sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF);
-        view.setInt16(pos, sample, true);
-        pos += 2;
-      }
-      offset++;
-    }
-
-    return new Blob([outBuffer], { type: 'audio/wav' });
+    } catch (err) { console.error(err); } finally { setIsSynthesizing(false); }
   };
 
   return (
-    <div className="space-y-8 animate-fadeIn p-6">
-      <div>
-        <h2 className="text-xl font-bold text-gray-800 mb-5 flex items-center gap-2">
-          <span className="p-2 bg-purple-50 text-purple-600 rounded-lg shadow-sm">🔊</span>
-          {language.name} Voice Synthesis
-        </h2>
-
-        <div className="space-y-6">
+    <div className="p-6 md:p-8 space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+          </div>
           <div>
-            <label className="block text-sm font-bold text-gray-500 uppercase tracking-widest mb-4">Select Voice Persona</label>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {KHMER_VOICES.map((voice) => (
-                <button
-                  key={voice.id}
-                  onClick={() => setSelectedVoice(voice.id)}
-                  className={`relative p-4 rounded-2xl border-2 transition-all text-left flex flex-col gap-2 group ${
-                    selectedVoice === voice.id 
-                    ? 'border-purple-600 bg-purple-50/50 shadow-lg shadow-purple-500/10 ring-4 ring-purple-100' 
-                    : 'border-gray-100 bg-white text-gray-600 hover:border-purple-200 hover:bg-gray-50'
-                  }`}
-                >
-                  <span className={`text-3xl transition-transform duration-300 ${selectedVoice === voice.id ? 'scale-110' : 'group-hover:scale-110'}`}>
-                    {voice.emoji}
-                  </span>
-                  <div>
-                    <div className={`font-black text-sm ${selectedVoice === voice.id ? 'text-purple-700' : 'text-gray-900'}`}>
-                      {voice.name}
-                    </div>
-                    <div className="text-[10px] font-bold uppercase tracking-wider opacity-60">
-                      {voice.gender}
-                    </div>
-                  </div>
-                  {selectedVoice === voice.id && (
-                    <div className="absolute top-2 right-2 w-2 h-2 bg-purple-600 rounded-full"></div>
-                  )}
-                </button>
-              ))}
+            <h3 className="text-sm font-bold text-gray-900">Synthesis Engine</h3>
+            <p className="text-xs text-gray-500 font-medium">Generate lifelike speech in {language.name}</p>
+          </div>
+        </div>
+
+        {/* Professional Toggle for Mode */}
+        <div className="flex p-1 bg-gray-100/80 rounded-lg">
+          <button 
+            onClick={() => setTtsMode('solo')}
+            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all duration-200 ${ttsMode === 'solo' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            Single Voice
+          </button>
+          <button 
+            onClick={() => setTtsMode('scene')}
+            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all duration-200 ${ttsMode === 'scene' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            Script to Scene
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        {ttsMode === 'solo' ? (
+          <div className="animate-fadeIn space-y-6">
+            <div>
+                <div className="flex items-center justify-between mb-3">
+                   <label className="text-xs font-semibold text-gray-700">Select Persona</label>
+                   <div className="flex gap-1 bg-gray-50 p-0.5 rounded-lg border border-gray-100">
+                      {(['Female', 'Male'] as const).map(g => (
+                        <button key={g} onClick={() => setGenderFilter(g)} className={`px-3 py-1 rounded-md text-[10px] font-semibold transition-all ${genderFilter === g ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
+                          {g}
+                        </button>
+                      ))}
+                   </div>
+                </div>
+                
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-3">
+                  {filteredVoices.map(v => (
+                    <button 
+                      key={v.name} 
+                      onClick={() => setSelectedVoice(v)} 
+                      className={`relative p-3 rounded-xl border text-center transition-all duration-200 group ${selectedVoice.id === v.id && selectedVoice.name === v.name ? 'border-purple-500 bg-purple-50/50 shadow-sm ring-1 ring-purple-500/20' : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'}`}
+                    >
+                      <span className="text-2xl block mb-2 filter drop-shadow-sm group-hover:scale-110 transition-transform">{v.emoji}</span>
+                      <span className="text-[10px] font-semibold text-gray-700 truncate block">{v.name}</span>
+                      {selectedVoice.id === v.id && selectedVoice.name === v.name && (
+                        <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-purple-500 rounded-full"></div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+            </div>
+
+            <div>
+                <div className="flex items-center justify-between mb-3">
+                    <label className="text-xs font-semibold text-gray-700">Speaking Style</label>
+                </div>
+                {/* Updated grid to handle 7 items better: 3 on mobile, 4 on small tablet, 7 on large desktop */}
+                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                    {SUPPORTED_STYLES.map(style => (
+                        <button
+                            key={style.name}
+                            onClick={() => setSelectedStyle(style)}
+                            className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex flex-col items-center gap-1 ${
+                                selectedStyle.name === style.name
+                                ? 'bg-purple-50 border-purple-200 text-purple-700 ring-1 ring-purple-200'
+                                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                            }`}
+                        >
+                            <span className="text-lg">{style.emoji}</span>
+                            <span>{style.name}</span>
+                        </button>
+                    ))}
+                </div>
             </div>
           </div>
-
-          <div className="relative group">
-            <label className="block text-sm font-bold text-gray-500 uppercase tracking-widest mb-3">Input Text</label>
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder={`Type something in ${language.name}...`}
-              className="w-full h-44 p-5 bg-gray-50 border border-gray-100 rounded-[24px] focus:ring-4 focus:ring-purple-500/10 focus:border-purple-400 focus:bg-white outline-none transition-all text-gray-800 font-medium text-lg leading-relaxed placeholder:text-gray-300"
-            />
-            {text && (
-              <button
-                onClick={downloadTextFile}
-                className="absolute bottom-6 right-6 p-3 bg-white/90 hover:bg-white text-gray-500 hover:text-purple-600 rounded-xl border border-gray-100 shadow-sm transition-all flex items-center gap-2"
-                title="Save as Text"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                <span className="text-[10px] font-bold uppercase tracking-widest">TXT</span>
-              </button>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-4">
-            <button
-              onClick={handleSynthesize}
-              disabled={isSynthesizing || !text.trim()}
-              className="group relative overflow-hidden w-full py-5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white font-black rounded-2xl transition-all shadow-xl shadow-purple-500/20 active:scale-[0.98]"
-            >
-              <div className="relative z-10 flex items-center justify-center gap-3">
-                {isSynthesizing ? (
-                  <>
-                    <div className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-                    <span>SYNTHESIZING...</span>
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"></path></svg>
-                    <span>GENERATE {language.code.toUpperCase()} VOICE</span>
-                  </>
-                )}
+        ) : (
+          <div className="animate-fadeIn space-y-4">
+            <div className="flex items-center justify-between px-1">
+                <h4 className="text-xs font-bold text-gray-900 flex items-center gap-2">
+                  <span className="w-1 h-4 bg-purple-500 rounded-full"></span>
+                  Scene Configuration
+                </h4>
+                <span className="text-[10px] font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded-md">Multi-Speaker</span>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Speaker A Card - Male */}
+              <div className="relative group bg-white p-5 rounded-2xl border border-blue-100 shadow-sm hover:shadow-md hover:border-blue-200 transition-all overflow-hidden">
+                <div className="absolute -right-4 -top-4 w-24 h-24 bg-blue-50 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
+                
+                <div className="relative z-10 flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-100 to-blue-50 flex items-center justify-center text-2xl shadow-inner border border-blue-100 shrink-0">
+                        {speakerA.voice.emoji}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <h5 className="text-sm font-bold text-gray-900 leading-tight">Speaker A</h5>
+                                <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider mt-0.5">Male Role</p>
+                            </div>
+                        </div>
+                        
+                        <div className="space-y-3">
+                            <div>
+                                <input 
+                                    type="text" 
+                                    value={speakerA.name} 
+                                    onChange={e => setSpeakerA({...speakerA, name: e.target.value})}
+                                    className="w-full bg-blue-50/30 focus:bg-white border border-blue-100 focus:border-blue-400 rounded-lg px-3 py-2 text-sm font-bold text-gray-800 outline-none transition-all placeholder-blue-300/50"
+                                    placeholder="Name (e.g. Joe)"
+                                />
+                            </div>
+                            <div className="flex gap-2">
+                                <div className="relative flex-1">
+                                    <select 
+                                        value={speakerA.voice.name}
+                                        onChange={e => {
+                                            const v = VOICE_PERSONAS.find(p => p.name === e.target.value);
+                                            if (v) setSpeakerA({...speakerA, voice: v});
+                                        }}
+                                        className="w-full appearance-none bg-white border border-gray-200 focus:border-blue-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-blue-300"
+                                    >
+                                        {VOICE_PERSONAS.filter(v => v.gender === 'Male').map(v => (
+                                            <option key={v.name} value={v.name}>{v.name} • {v.style}</option>
+                                        ))}
+                                    </select>
+                                    <div className="absolute right-2.5 top-2.5 pointer-events-none text-gray-400">
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                                    </div>
+                                </div>
+                                <div className="relative flex-1">
+                                    <select 
+                                        value={speakerA.style.name}
+                                        onChange={e => {
+                                            const s = SUPPORTED_STYLES.find(st => st.name === e.target.value);
+                                            if (s) setSpeakerA({...speakerA, style: s});
+                                        }}
+                                        className="w-full appearance-none bg-white border border-gray-200 focus:border-blue-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-blue-300"
+                                    >
+                                        {SUPPORTED_STYLES.map(s => (
+                                            <option key={s.name} value={s.name}>{s.emoji} {s.name}</option>
+                                        ))}
+                                    </select>
+                                    <div className="absolute right-2.5 top-2.5 pointer-events-none text-gray-400">
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
               </div>
-            </button>
-
-            {audioUrl && (
-              <div className="animate-fadeIn pt-2 flex flex-col sm:flex-row justify-center gap-3">
-                <button
-                  onClick={playAudio}
-                  className="flex items-center justify-center gap-2 px-8 py-3.5 bg-white hover:bg-gray-50 text-gray-800 font-black rounded-xl border border-gray-200 transition-all shadow-sm active:bg-gray-100"
-                >
-                  <svg className="w-5 h-5 text-purple-600" fill="currentColor" viewBox="0 0 20 20"><path d="M4.5 3a.5.5 0 00-.5.5v13a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-13a.5.5 0 00-.5-.5h-1zm3 0a.5.5 0 00-.5.5v13a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-13a.5.5 0 00-.5-.5h-1zm3 0a.5.5 0 00-.5.5v13a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-13a.5.5 0 00-.5-.5h-1zm3 0a.5.5 0 00-.5.5v13a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-13a.5.5 0 00-.5-.5h-1z"></path></svg>
-                  REPLAY
-                </button>
-                <a 
-                  href={audioUrl} 
-                  download={`${language.code}-${selectedVoice}-voice.wav`}
-                  className="flex items-center justify-center gap-2 px-8 py-3.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-black rounded-xl border border-purple-100 transition-all shadow-sm"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                  DOWNLOAD .WAV
-                </a>
+              
+              {/* Speaker B Card - Female */}
+              <div className="relative group bg-white p-5 rounded-2xl border border-pink-100 shadow-sm hover:shadow-md hover:border-pink-200 transition-all overflow-hidden">
+                <div className="absolute -right-4 -top-4 w-24 h-24 bg-pink-50 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
+                
+                <div className="relative z-10 flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-pink-100 to-pink-50 flex items-center justify-center text-2xl shadow-inner border border-pink-100 shrink-0">
+                        {speakerB.voice.emoji}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <h5 className="text-sm font-bold text-gray-900 leading-tight">Speaker B</h5>
+                                <p className="text-[10px] font-bold text-pink-600 uppercase tracking-wider mt-0.5">Female Role</p>
+                            </div>
+                        </div>
+                        
+                        <div className="space-y-3">
+                            <div>
+                                <input 
+                                    type="text" 
+                                    value={speakerB.name} 
+                                    onChange={e => setSpeakerB({...speakerB, name: e.target.value})}
+                                    className="w-full bg-pink-50/30 focus:bg-white border border-pink-100 focus:border-pink-400 rounded-lg px-3 py-2 text-sm font-bold text-gray-800 outline-none transition-all placeholder-pink-300/50"
+                                    placeholder="Name (e.g. Jane)"
+                                />
+                            </div>
+                            <div className="flex gap-2">
+                                <div className="relative flex-1">
+                                    <select 
+                                        value={speakerB.voice.name}
+                                        onChange={e => {
+                                            const v = VOICE_PERSONAS.find(p => p.name === e.target.value);
+                                            if (v) setSpeakerB({...speakerB, voice: v});
+                                        }}
+                                        className="w-full appearance-none bg-white border border-gray-200 focus:border-pink-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-pink-300"
+                                    >
+                                        {VOICE_PERSONAS.filter(v => v.gender === 'Female').map(v => (
+                                             <option key={v.name} value={v.name}>{v.name} • {v.style}</option>
+                                        ))}
+                                    </select>
+                                    <div className="absolute right-2.5 top-2.5 pointer-events-none text-gray-400">
+                                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                                    </div>
+                                </div>
+                                <div className="relative flex-1">
+                                    <select 
+                                        value={speakerB.style.name}
+                                        onChange={e => {
+                                            const s = SUPPORTED_STYLES.find(st => st.name === e.target.value);
+                                            if (s) setSpeakerB({...speakerB, style: s});
+                                        }}
+                                        className="w-full appearance-none bg-white border border-gray-200 focus:border-pink-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-pink-300"
+                                    >
+                                        {SUPPORTED_STYLES.map(s => (
+                                            <option key={s.name} value={s.name}>{s.emoji} {s.name}</option>
+                                        ))}
+                                    </select>
+                                    <div className="absolute right-2.5 top-2.5 pointer-events-none text-gray-400">
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
               </div>
-            )}
+            </div>
           </div>
+        )}
+
+        <div className="relative">
+           <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-semibold text-gray-700">
+              {ttsMode === 'solo' ? 'Script Content' : 'Dialogue Script'}
+            </label>
+            {ttsMode === 'scene' && (
+              <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Format: Name: Message</span>
+            )}
+           </div>
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder={ttsMode === 'solo' ? "Enter text for synthesis..." : `${speakerA.name}: Hello!\n${speakerB.name}: Hi there, how are you?`}
+            className="w-full h-40 p-4 bg-white border border-gray-200 rounded-xl focus:ring-4 focus:ring-purple-500/10 focus:border-purple-400 outline-none transition-all text-sm font-medium resize-none khmer-font leading-relaxed shadow-sm placeholder-gray-300"
+          />
+        </div>
+
+        <div className="flex flex-col gap-4 pt-2">
+          <button
+            onClick={handleSynthesize}
+            disabled={isSynthesizing || !text.trim()}
+            className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-sm ${
+                !text.trim() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' :
+                isSynthesizing ? 'bg-purple-100 text-purple-700 cursor-wait' : 'bg-purple-600 hover:bg-purple-700 text-white shadow-purple-500/20'
+            }`}
+          >
+            {isSynthesizing ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-purple-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Processing...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                Generate Audio
+              </>
+            )}
+          </button>
+          
+          {audioUrl && (
+            <div className="animate-fadeIn bg-white border border-gray-200 rounded-xl p-4 shadow-sm flex flex-col gap-3">
+               <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                    <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">Playback Ready</span>
+                  </div>
+                  <a href={audioUrl} download={`khmervoice-scene-${Date.now()}.wav`} className="text-xs font-bold text-purple-600 hover:text-purple-700 flex items-center gap-1.5 transition-colors px-2 py-1 rounded-md hover:bg-purple-50">
+                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                     Download WAV
+                  </a>
+               </div>
+               <audio controls src={audioUrl} className="w-full h-10 rounded-lg focus:outline-none" />
+            </div>
+          )}
         </div>
       </div>
     </div>

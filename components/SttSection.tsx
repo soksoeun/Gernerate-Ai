@@ -1,186 +1,269 @@
 
-import React, { useState, useRef } from 'react';
-import { transcribeKhmerAudio } from '../services/gemini';
-import { blobToBase64 } from '../services/audio';
+import React, { useState, useRef, useEffect } from 'react';
+import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
+import { transcribeAndDetectLanguage } from '../services/gemini';
+import { blobToBase64, createPcmBlob } from '../services/audio';
 import { Visualizer } from './Visualizer';
-import { LanguageConfig } from '../types';
+import { LanguageConfig, SUPPORTED_LANGUAGES } from '../types';
 
 interface SttSectionProps {
   language: LanguageConfig;
+  setCurrentLanguage: React.Dispatch<React.SetStateAction<LanguageConfig>>;
   transcription: string;
   setTranscription: React.Dispatch<React.SetStateAction<string>>;
 }
 
-export const SttSection: React.FC<SttSectionProps> = ({ language, transcription, setTranscription }) => {
+export const SttSection: React.FC<SttSectionProps> = ({ 
+  language, 
+  setCurrentLanguage,
+  transcription, 
+  setTranscription 
+}) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const [interimText, setInterimText] = useState('');
+  const [isCopied, setIsCopied] = useState(false);
+  
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const liveSessionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [transcription, interimText]);
+
+  const handleTranscriptionUpdate = (text: string) => {
+    setInterimText(text);
+  };
 
   const startRecording = async () => {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setStream(mediaStream);
-      const mediaRecorder = new MediaRecorder(mediaStream);
-      mediaRecorderRef.current = mediaRecorder;
-      chunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        setIsProcessing(true);
-        try {
-          const base64 = await blobToBase64(audioBlob);
-          const result = await transcribeKhmerAudio(base64, 'audio/webm', language.name);
-          setTranscription(prev => (prev ? prev + ' ' + result : result));
-        } catch (error) {
-          console.error("Transcription error:", error);
-          alert("Failed to transcribe audio. Please try again.");
-        } finally {
-          setIsProcessing(false);
-        }
-      };
-
-      mediaRecorder.start();
       setIsRecording(true);
+
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      audioContextRef.current = audioContext;
+
+      const sessionPromise = ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          systemInstruction: `Transcribe audio to ${language.name}. Only output the words spoken. No AI chatter.`,
+        },
+        callbacks: {
+          onopen: () => {
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+            
+            scriptProcessor.onaudioprocess = (e) => {
+              const inputData = e.inputBuffer.getChannelData(0);
+              const pcmBlob = createPcmBlob(inputData);
+              sessionPromise.then(session => {
+                session.sendRealtimeInput({ media: pcmBlob });
+              });
+            };
+
+            source.connect(scriptProcessor);
+            scriptProcessor.connect(audioContext.destination);
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            if (message.serverContent?.inputTranscription) {
+              const text = message.serverContent.inputTranscription.text;
+              handleTranscriptionUpdate(text);
+            }
+          },
+          onerror: (e) => console.error(e),
+          onclose: () => {},
+        },
+      });
+
+      liveSessionRef.current = sessionPromise;
     } catch (err) {
-      console.error("Error accessing microphone:", err);
-      alert("Microphone access denied.");
+      console.error(err);
+      setIsRecording(false);
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+    if (isRecording) {
       setIsRecording(false);
+      if (interimText) {
+        setTranscription(prev => {
+          const base = prev.trim();
+          return base ? base + ' ' + interimText : interimText;
+        });
+        setInterimText('');
+      }
+      audioContextRef.current?.close();
+      audioContextRef.current = null;
       stream?.getTracks().forEach(track => track.stop());
       setStream(null);
+      if (liveSessionRef.current) {
+        liveSessionRef.current.then((session: any) => session.close());
+        liveSessionRef.current = null;
+      }
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('audio/')) {
-      alert("Please upload a valid audio file.");
-      return;
-    }
-
-    setIsProcessing(true);
-    try {
-      const base64 = await blobToBase64(file);
-      const result = await transcribeKhmerAudio(base64, file.type, language.name);
-      setTranscription(prev => (prev ? prev + '\n' + result : result));
-    } catch (error) {
-      console.error("File transcription error:", error);
-      alert("Failed to transcribe the uploaded file.");
-    } finally {
-      setIsProcessing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+  const handleCopy = () => {
+    if (!transcription.trim()) return;
+    navigator.clipboard.writeText(transcription).then(() => {
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    });
   };
 
-  const triggerFileUpload = () => {
-    fileInputRef.current?.click();
-  };
-
-  const downloadTranscription = () => {
-    if (!transcription) return;
+  const handleDownload = () => {
+    if (!transcription.trim()) return;
     const blob = new Blob([transcription], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `transcription-${language.code}-${new Date().getTime()}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `stt-${language.code}-${new Date().getTime()}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
+  const clearTranscription = () => {
+    if (isRecording) stopRecording();
+    setTranscription('');
+    setInterimText('');
+  };
+
   return (
-    <div className="space-y-6 animate-fadeIn">
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            <span className="p-2 bg-blue-50 text-blue-600 rounded-lg">🎙️</span>
-            {language.name} Dictation
-          </h2>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileChange} 
-            accept="audio/*" 
-            className="hidden" 
-          />
+    <div className="p-6 md:p-8 space-y-6">
+      <div className="flex items-center justify-between border-b border-gray-100 pb-6">
+        <div className="flex items-center gap-3">
+           <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Transcription Hub</h3>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-gray-300'}`}></span>
+              <p className="text-xs text-gray-500 font-medium">{isRecording ? 'Live Recording Active' : 'Ready to Capture'}</p>
+            </div>
+          </div>
         </div>
-        
-        <div className="flex flex-col gap-4">
-          <div className="min-h-[160px] p-4 bg-gray-50 rounded-xl border border-gray-100 text-gray-700 khmer-font leading-relaxed whitespace-pre-wrap relative">
-            {transcription || `Your transcribed ${language.name} text will appear here...`}
-            {isProcessing && (
-              <div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-xl backdrop-blur-[2px]">
-                <div className="flex items-center gap-2 px-4 py-2 bg-white shadow-sm border border-gray-100 rounded-full animate-pulse">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" />
-                  <span className="text-blue-500 font-medium text-sm">Transcribing...</span>
-                </div>
-              </div>
-            )}
-          </div>
 
-          <div className="flex flex-wrap items-stretch sm:items-center gap-3">
-            {!isRecording ? (
-              <button
-                onClick={startRecording}
-                disabled={isProcessing}
-                className="flex-[2] min-w-[140px] py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-200"
-              >
-                Start Recording
-              </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleDownload}
+            disabled={!transcription.trim()}
+            className="p-2.5 rounded-xl text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-all disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Download Transcript"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+          </button>
+          <button
+            onClick={handleCopy}
+            disabled={!transcription.trim()}
+            className="p-2.5 rounded-xl text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-all disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Copy to Clipboard"
+          >
+            {isCopied ? (
+              <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
             ) : (
-              <button
-                onClick={stopRecording}
-                className="flex-[2] min-w-[140px] py-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 animate-pulse"
-              >
-                Stop Recording
-              </button>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>
             )}
-
-            <button
-              onClick={triggerFileUpload}
-              disabled={isProcessing || isRecording}
-              className="flex-1 min-w-[120px] py-4 bg-indigo-50 hover:bg-indigo-100 disabled:bg-gray-50 text-indigo-600 font-semibold rounded-xl border border-indigo-100 transition-all flex items-center justify-center gap-2"
-            >
-              <span>📁</span> Upload
-            </button>
-            
-            {transcription && (
-              <button
-                onClick={downloadTranscription}
-                className="px-6 py-4 bg-green-50 hover:bg-green-100 text-green-700 font-semibold rounded-xl border border-green-100 transition-all flex items-center gap-2"
-                title="Download as .txt"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                <span className="hidden sm:inline">Save</span>
-              </button>
-            )}
-
-            <button
-              onClick={() => setTranscription('')}
-              className="px-6 py-4 bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold rounded-xl transition-all"
-            >
-              Clear
-            </button>
-          </div>
-
-          {isRecording && <Visualizer stream={stream} isRecording={isRecording} />}
+          </button>
+          <button
+            onClick={clearTranscription}
+            disabled={!transcription.trim() && !interimText.trim()}
+            className="p-2.5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Clear Text"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+          </button>
         </div>
       </div>
+
+      <div className="relative">
+        <div 
+          ref={scrollRef}
+          className="min-h-[320px] p-6 bg-white rounded-2xl border border-gray-200 text-gray-800 khmer-font text-sm leading-7 whitespace-pre-wrap overflow-y-auto max-h-[500px] shadow-inner scroll-smooth"
+        >
+          {transcription}
+          {interimText && <span className="text-blue-500 font-medium italic animate-pulse ml-1">{interimText}</span>}
+          {!transcription.trim() && !interimText.trim() && (
+            <div className="h-[280px] flex flex-col items-center justify-center gap-3 opacity-30 select-none">
+              <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-500">Waiting for audio input...</p>
+            </div>
+          )}
+          {isProcessing && (
+            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-10 rounded-2xl">
+              <div className="flex flex-col items-center gap-3">
+                 <div className="flex gap-1.5">
+                   <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                   <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                   <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
+                 </div>
+                 <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Processing</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+        <button
+          onClick={isRecording ? stopRecording : startRecording}
+          disabled={isProcessing}
+          className={`w-full sm:flex-[4] py-4 rounded-xl font-bold text-sm tracking-wide transition-all duration-200 flex items-center justify-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 ${
+            isRecording 
+            ? 'bg-red-500 text-white hover:bg-red-600 shadow-red-500/20' 
+            : 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-500/20'
+          }`}
+        >
+          {isRecording ? (
+            <><span className="w-2 h-2 bg-white rounded-full animate-pulse"></span> Stop Recording</>
+          ) : (
+            <>
+               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+               Start Transcription
+            </>
+          )}
+        </button>
+        
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isProcessing || isRecording}
+          className="w-full sm:flex-1 py-4 bg-white hover:bg-gray-50 text-gray-700 font-bold text-sm rounded-xl border border-gray-200 transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0"
+        >
+          <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4-4m4 4V4"></path></svg>
+          Upload
+        </button>
+        <input type="file" ref={fileInputRef} onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            setIsProcessing(true);
+            try {
+              const base64 = await blobToBase64(file);
+              const { transcription: res, detectedLanguageCode } = await transcribeAndDetectLanguage(base64, file.type);
+              setTranscription(prev => prev + (prev ? '\n' : '') + res);
+              const matched = SUPPORTED_LANGUAGES.find(l => l.code === detectedLanguageCode);
+              if (matched && matched.code !== language.code) setCurrentLanguage(matched);
+            } catch (err) { console.error(err); } finally { setIsProcessing(false); }
+          }
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }} accept="audio/*" className="hidden" />
+      </div>
+
+      {(isRecording || interimText) && (
+        <div className="animate-fadeIn mt-2">
+          <Visualizer stream={stream} isRecording={isRecording} />
+        </div>
+      )}
     </div>
   );
 };
