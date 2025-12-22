@@ -86,15 +86,15 @@ export const VOICE_PERSONAS: VoiceConfig[] = [
     style: 'Clear Adult Female', 
     gender: 'Female', 
     emoji: '👩',
-    description: 'A professional adult female voice with clear articulation, mid-range pitch, and warm tone.'
+    description: 'A clear and professional adult female voice with a standard pitch and moderate speaking rate. The tone is confident, warm, and articulate.'
   },
   { 
     id: 'Zephyr', 
     name: 'Old Woman', 
-    style: 'Kind Mature Female', 
+    style: 'Wise Mature Female', 
     gender: 'Female', 
     emoji: '👵',
-    description: 'An elderly female voice that is lower-pitched, softer, slower-paced, and kind.'
+    description: 'An elderly female voice with a lower pitch, slower speaking pace, and a softer, slightly breathy or trembling texture conveying age and wisdom.'
   },
   { 
     id: 'Zephyr', 
@@ -102,7 +102,7 @@ export const VOICE_PERSONAS: VoiceConfig[] = [
     style: 'Playful Young Female', 
     gender: 'Female', 
     emoji: '👧',
-    description: 'A young girl\'s voice that is high-pitched, fast-paced, playful, and bright.'
+    description: 'A young girl\'s voice with a high pitch and lighter vocal weight. The speaking rate is energetic and slightly faster, with a bright and playful tone.'
   },
 ];
 
@@ -117,4 +117,5 @@ export const SUPPORTED_STYLES: StyleConfig[] = [
   { name: 'Excited', emoji: '🤩', instruction: 'very excited and high energy' },
   { name: 'Whisper', emoji: '🤫', instruction: 'whispering and quiet' },
   { name: 'Storytelling', emoji: '📖', instruction: 'engaging, warm, and narrative storytelling' },
+  { name: 'Promote Product', emoji: '📣', instruction: 'persuasive, energetic, and promotional marketing tone' },
 ];

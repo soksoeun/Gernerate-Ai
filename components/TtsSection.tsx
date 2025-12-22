@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { synthesizeSpeech, synthesizeMultiSpeakerSpeech } from '../services/gemini';
 import { VOICE_PERSONAS, SUPPORTED_STYLES, LanguageConfig, VoiceConfig, StyleConfig } from '../types';
 
@@ -18,7 +18,6 @@ export const TtsSection: React.FC<TtsSectionProps> = ({ language, text, setText 
   const [genderFilter, setGenderFilter] = useState<'Male' | 'Female'>('Female');
   
   // Script to Scene State
-  // Default Speaker A to a male voice and Speaker B to a female voice
   const [speakerA, setSpeakerA] = useState({ 
     name: 'Joe', 
     voice: VOICE_PERSONAS.find(v => v.gender === 'Male') || VOICE_PERSONAS[0],
@@ -32,6 +31,10 @@ export const TtsSection: React.FC<TtsSectionProps> = ({ language, text, setText 
 
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [synthesisError, setSynthesisError] = useState<string | null>(null);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const filteredVoices = useMemo(() => VOICE_PERSONAS.filter(v => v.gender === genderFilter), [genderFilter]);
 
@@ -44,29 +47,54 @@ export const TtsSection: React.FC<TtsSectionProps> = ({ language, text, setText 
 
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setUploadedFileName(file.name);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        setText(content);
+      };
+      reader.readAsText(file);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleClearPlayback = () => {
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+    }
+    setSynthesisError(null);
+  };
+
+  const handleClearText = () => {
+    setText('');
+    setUploadedFileName(null);
+  };
+
   const handleSynthesize = async () => {
     if (!text.trim()) return;
     setIsSynthesizing(true);
+    setSynthesisError(null);
     try {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       
       let audioBuffer;
+      
       if (ttsMode === 'solo') {
-        // Enhanced prompt for solo mode using the detailed description
         const characterPrompt = `
 Generate speech in ${language.name}.
 Speaker Profile: ${selectedVoice.description}.
 Speaking Style: ${selectedStyle.instruction}.
 Text: "${text}"`;
-
         audioBuffer = await synthesizeSpeech(characterPrompt, selectedVoice.id, {}, language.name);
       } else {
         const speakers = [
           { name: speakerA.name, voiceId: speakerA.voice.id },
           { name: speakerB.name, voiceId: speakerB.voice.id }
         ];
-        
-        // Enhanced prompt for scene mode
         const scriptWithContext = `
 Generate a conversation in ${language.name}.
 
@@ -76,7 +104,6 @@ Speaker Configuration:
 
 Script:
 ${text}`;
-
         audioBuffer = await synthesizeMultiSpeakerSpeech(scriptWithContext, speakers, language.name);
       }
       
@@ -105,7 +132,12 @@ ${text}`;
 
       const url = URL.createObjectURL(wavBlob);
       setAudioUrl(url);
-    } catch (err) { console.error(err); } finally { setIsSynthesizing(false); }
+    } catch (err) { 
+        console.error(err);
+        setSynthesisError("Failed to generate audio. Please verify your input and try again.");
+    } finally { 
+        setIsSynthesizing(false); 
+    }
   };
 
   return (
@@ -121,7 +153,7 @@ ${text}`;
           </div>
         </div>
 
-        {/* Professional Toggle for Mode */}
+        {/* Mode Toggles */}
         <div className="flex p-1 bg-gray-100/80 rounded-lg">
           <button 
             onClick={() => setTtsMode('solo')}
@@ -139,7 +171,7 @@ ${text}`;
       </div>
 
       <div className="space-y-6">
-        {ttsMode === 'solo' ? (
+        {ttsMode === 'solo' && (
           <div className="animate-fadeIn space-y-6">
             <div>
                 <div className="flex items-center justify-between mb-3">
@@ -174,8 +206,7 @@ ${text}`;
                 <div className="flex items-center justify-between mb-3">
                     <label className="text-xs font-semibold text-gray-700">Speaking Style</label>
                 </div>
-                {/* Updated grid to handle 7 items better: 3 on mobile, 4 on small tablet, 7 on large desktop */}
-                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-4 gap-2">
                     {SUPPORTED_STYLES.map(style => (
                         <button
                             key={style.name}
@@ -193,7 +224,9 @@ ${text}`;
                 </div>
             </div>
           </div>
-        ) : (
+        )}
+
+        {ttsMode === 'scene' && (
           <div className="animate-fadeIn space-y-4">
             <div className="flex items-center justify-between px-1">
                 <h4 className="text-xs font-bold text-gray-900 flex items-center gap-2">
@@ -305,7 +338,7 @@ ${text}`;
                                             const v = VOICE_PERSONAS.find(p => p.name === e.target.value);
                                             if (v) setSpeakerB({...speakerB, voice: v});
                                         }}
-                                        className="w-full appearance-none bg-white border border-gray-200 focus:border-pink-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-pink-300"
+                                        className="w-full appearance-none bg-white border border-pink-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-pink-300"
                                     >
                                         {VOICE_PERSONAS.filter(v => v.gender === 'Female').map(v => (
                                              <option key={v.name} value={v.name}>{v.name} • {v.style}</option>
@@ -322,7 +355,7 @@ ${text}`;
                                             const s = SUPPORTED_STYLES.find(st => st.name === e.target.value);
                                             if (s) setSpeakerB({...speakerB, style: s});
                                         }}
-                                        className="w-full appearance-none bg-white border border-gray-200 focus:border-pink-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-pink-300"
+                                        className="w-full appearance-none bg-white border border-pink-400 rounded-lg pl-3 pr-8 py-2 text-xs font-semibold text-gray-600 outline-none transition-all cursor-pointer hover:border-pink-300"
                                     >
                                         {SUPPORTED_STYLES.map(s => (
                                             <option key={s.name} value={s.name}>{s.emoji} {s.name}</option>
@@ -343,20 +376,69 @@ ${text}`;
 
         <div className="relative">
            <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-semibold text-gray-700">
-              {ttsMode === 'solo' ? 'Script Content' : 'Dialogue Script'}
+            <label className="text-xs font-semibold text-gray-700 flex items-center gap-2">
+              {uploadedFileName ? (
+                <span className="flex items-center gap-1.5 text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-100">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  {uploadedFileName}
+                </span>
+              ) : (
+                ttsMode === 'scene' ? 'Dialogue Script' : 'Script Content'
+              )}
             </label>
-            {ttsMode === 'scene' && (
-              <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Format: Name: Message</span>
-            )}
+            
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={handleClearText}
+                    disabled={!text.trim()}
+                    className="text-[10px] font-bold text-gray-400 hover:text-red-500 bg-gray-50 hover:bg-red-50 px-2 py-1 rounded transition-colors flex items-center gap-1 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                    title="Clear Text"
+                >
+                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                   Clear
+                </button>
+                <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-[10px] font-bold text-gray-500 hover:text-purple-600 bg-gray-100 hover:bg-purple-50 px-2 py-1 rounded transition-colors flex items-center gap-1"
+                    title="Upload Text File"
+                >
+                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4-4m4 4V4"></path></svg>
+                   Upload Text
+                </button>
+                <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleFileUpload} 
+                    accept=".txt,.md,.json,.csv" 
+                    className="hidden" 
+                />
+            </div>
            </div>
+           
+           {ttsMode === 'scene' && (
+              <div className="mb-3 p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-900 flex items-start gap-2">
+                 <svg className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                 <div>
+                    <p className="font-semibold">Use the format: <span className="font-mono bg-blue-100/50 px-1 rounded text-blue-700">Speaker Name: Dialogue</span></p>
+                    <p className="mt-1 text-blue-700/80">Example: {speakerA.name}: Hello there! {speakerB.name}: Hi {speakerA.name}, how are you today?</p>
+                 </div>
+              </div>
+            )}
+
           <textarea
             value={text}
             onChange={e => setText(e.target.value)}
-            placeholder={ttsMode === 'solo' ? "Enter text for synthesis..." : `${speakerA.name}: Hello!\n${speakerB.name}: Hi there, how are you?`}
+            placeholder={ttsMode === 'scene' ? `${speakerA.name}: Hello!\n${speakerB.name}: Hi there, how are you?` : "Enter text for synthesis..."}
             className="w-full h-40 p-4 bg-white border border-gray-200 rounded-xl focus:ring-4 focus:ring-purple-500/10 focus:border-purple-400 outline-none transition-all text-sm font-medium resize-none khmer-font leading-relaxed shadow-sm placeholder-gray-300"
           />
         </div>
+
+        {synthesisError && (
+            <div className="animate-fadeIn p-3 rounded-xl bg-red-50 border border-red-100 text-xs text-red-600 flex items-center gap-2">
+                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                {synthesisError}
+            </div>
+        )}
 
         <div className="flex flex-col gap-4 pt-2">
           <button
@@ -390,10 +472,20 @@ ${text}`;
                     <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                     <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">Playback Ready</span>
                   </div>
-                  <a href={audioUrl} download={`khmervoice-scene-${Date.now()}.wav`} className="text-xs font-bold text-purple-600 hover:text-purple-700 flex items-center gap-1.5 transition-colors px-2 py-1 rounded-md hover:bg-purple-50">
-                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                     Download WAV
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={handleClearPlayback}
+                      className="text-xs font-bold text-gray-400 hover:text-red-500 flex items-center gap-1.5 transition-colors px-2 py-1 rounded-md hover:bg-red-50"
+                      title="Clear Playback"
+                    >
+                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                       Clear
+                    </button>
+                    <a href={audioUrl} download={`khmervoice-synthesis-${Date.now()}.wav`} className="text-xs font-bold text-purple-600 hover:text-purple-700 flex items-center gap-1.5 transition-colors px-2 py-1 rounded-md hover:bg-purple-50">
+                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                       Download WAV
+                    </a>
+                  </div>
                </div>
                <audio controls src={audioUrl} className="w-full h-10 rounded-lg focus:outline-none" />
             </div>
